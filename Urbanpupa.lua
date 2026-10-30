@@ -10,37 +10,35 @@ local Camera = Workspace.CurrentCamera
 local scriptActive = true
 local isRightClicking = false
 
+-- ตั้งจำนวนซอมบี้ที่ต้องการเห็นก่อนยิง (ปรับเปลี่ยนตัวเลขตรงนี้ได้ เช่น 5 หรือ 6)
+local requiredZombieCount = 5 
+
 -- 1. ตั้งค่า RaycastParams สำหรับตรวจสอบสิ่งกีดขวาง
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- 2. ฟังก์ชันตรวจสอบว่าเป้าหมายมีกำแพงบังอยู่หรือไม่ (Wall Check)
+-- 2. ฟังก์ชันตรวจสอบว่าซอมบี้ถูกกำแพงบังหรือไม่
 local function isTargetVisible(targetHead)
     if not targetHead then return false end
     
-    -- ไม่นำตัวละครของผู้เล่นเองมาคำนวณเป็นสิ่งกีดขวาง
     if LocalPlayer.Character then
         raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
     end
 
     local origin = Camera.CFrame.Position
     local direction = targetHead.Position - origin
-    
-    -- ยิงรังสีจากกล้องไปหาหัวเป้าหมาย
     local result = Workspace:Raycast(origin, direction, raycastParams)
     
-    -- ถ้าไม่ชนอะไรเลย หรือชนตัวเป้าหมายเอง แปลว่า "มองเห็นตัว"
     if not result or result.Instance:IsDescendantOf(targetHead.Parent) then
         return true
     end
     
-    return false -- มีกำแพงหรือสิ่งของบังอยู่
+    return false
 end
 
--- 3. ค้นหาซอมบี้ที่อยู่บนหน้าจอ และ "ต้องไม่มีกำแพงบัง"
-local function getClosestVisibleNPC()
-    local closest = nil
-    local shortestDistance = math.huge
+-- 3. รวบรวมซอมบี้ทั้งหมดที่ "มองเห็นได้ในจอขณะนั้น" ใส่ไว้ใน Table
+local function getVisibleNPCs()
+    local visibleList = {}
 
     for _, obj in pairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("Head") then
@@ -48,44 +46,55 @@ local function getClosestVisibleNPC()
                 if obj.Humanoid.Health > 0 then
                     local headPos, onScreen = Camera:WorldToViewportPoint(obj.Head.Position)
                     
-                    -- เช็กทั้งอยู่บนหน้าจอ (onScreen) และไม่มีกำแพงบัง (isTargetVisible)
+                    -- ต้องอยู่บนหน้าจอ และไม่มีกำแพงบัง
                     if onScreen and isTargetVisible(obj.Head) then
-                        local mousePos = UserInputService:GetMouseLocation()
-                        local dist = (Vector2.new(headPos.X, headPos.Y) - mousePos).Magnitude
-                        if dist < shortestDistance then
-                            closest = obj
-                            shortestDistance = dist
-                        end
+                        table.insert(visibleList, obj)
                     end
                 end
             end
         end
     end
-    return closest
+    return visibleList
 end
 
--- 4. ระบบ Auto Sight + Lock + Shoot (ทำงานเฉพาะเป้าหมายที่มองเห็น)
+-- 4. ระบบเช็กจำนวนซอมบี้ก่อนเปิดฉากยิง
 RunService.RenderStepped:Connect(function()
     if scriptActive then
-        local target = getClosestVisibleNPC()
+        local visibleZombies = getVisibleNPCs()
         local mousePos = UserInputService:GetMouseLocation()
 
-        if target and target:FindFirstChild("Head") then
-            -- หันกล้องไปที่หัวซอมบี้
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Head.Position)
+        -- เงื่อนไข: จำนวนซอมบี้ที่มองเห็นต้อง >= 5 ตัวขึ้นไป
+        if #visibleZombies >= requiredZombieCount then
+            -- ค้นหาตัวที่อยู่ใกล้เป้าเมาส์ที่สุดจากซอมบี้ที่มองเห็น
+            local target = nil
+            local shortestDistance = math.huge
 
-            -- กดคลิกขวาเล็ง
-            if not isRightClicking then
-                isRightClicking = true
-                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, true, game, 0)
+            for _, zombie in pairs(visibleZombies) do
+                local headPos = Camera:WorldToViewportPoint(zombie.Head.Position)
+                local dist = (Vector2.new(headPos.X, headPos.Y) - mousePos).Magnitude
+                if dist < shortestDistance then
+                    target = zombie
+                    shortestDistance = dist
+                end
             end
 
-            -- กดคลิกซ้ายยิง
-            VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 0)
-            task.wait(0.03)
-            VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 0)
+            if target and target:FindFirstChild("Head") then
+                -- หันกล้องไปที่หัวซอมบี้
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Head.Position)
+
+                -- กดคลิกขวาเล็ง
+                if not isRightClicking then
+                    isRightClicking = true
+                    VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, true, game, 0)
+                end
+
+                -- กดคลิกซ้ายยิง
+                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 0)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 0)
+            end
         else
-            -- ปล่อยคลิกขวาหากซอมบี้เดินเข้าหลังกำแพงหรือตาย
+            -- ถ้าซอมบี้ยังเห็นไม่ถึงจำนวนที่ตั้งไว้ ให้ปล่อยคลิกขวาและไม่ทำอะไร
             if isRightClicking then
                 isRightClicking = false
                 VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, false, game, 0)
@@ -94,7 +103,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- 5. ระบบกด E อัตโนมัติ
+-- 5. ระบบกด E อัตโนมัติวนลูป
 task.spawn(function()
     while task.wait(0.1) do
         if scriptActive then
